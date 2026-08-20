@@ -34,6 +34,11 @@ from PySide6.QtWidgets import (
 
 from fetchers import PRESETS, fetch_balance, fmt_amount, get_api_key
 
+try:
+    from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: F401  须在 QApplication 之前
+except Exception:
+    pass
+
 WHALE = os.path.join(os.path.dirname(ROOT), "assets", "DSniang02.png")
 if not os.path.isfile(WHALE):
     WHALE = os.path.join(ROOT, "assets", "DSniang02.png")
@@ -248,6 +253,18 @@ class SettingsDialog(QDialog):
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(10)
 
+        look = QHBoxLayout()
+        look.addWidget(QLabel("外观"))
+        self.style_box = QComboBox()
+        self.style_box.addItems(["小鲸鱼", "透明卡片"])
+        self.style_box.setCurrentIndex(1 if str(conf.get("style") or "") == "glass" else 0)
+        look.addWidget(self.style_box, 1)
+        root.addLayout(look)
+        look_hint = QLabel("小鲸鱼还是原来那只。透明卡片一次列出所有已勾选的平台。")
+        look_hint.setWordWrap(True)
+        look_hint.setStyleSheet("color:#334155;font-size:13px;")
+        root.addWidget(look_hint)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -401,6 +418,7 @@ class SettingsDialog(QDialog):
             "api_keys": keys,
             "deepseek_api_key": keys.get("deepseek", ""),
             "custom": self.custom_items,
+            "style": "glass" if self.style_box.currentIndex() == 1 else "whale",
         })
         set_startup(self.boot.isChecked())
         self.saved.emit()
@@ -422,8 +440,10 @@ class FetchThread(QThread):
 
 
 class PetWindow(QWidget):
-    def __init__(self):
+    def __init__(self, on_style_restart=None):
         super().__init__()
+        self._style = "whale"
+        self._on_style_restart = on_style_restart
         self.setWindowTitle("AI余额桌宠")
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus
@@ -601,6 +621,10 @@ class PetWindow(QWidget):
         self._settings.activateWindow()
 
     def apply_settings(self):
+        if str(load_conf().get("style") or "whale") == "glass":
+            if self._on_style_restart:
+                QTimer.singleShot(0, self._on_style_restart)
+            return
         self._rebuild_tabs()
         self._apply_size()
         self.refresh(True)
@@ -865,37 +889,84 @@ class PetWindow(QWidget):
             a.setCheckable(True)
             a.setChecked(pid == self.provider)
             a.triggered.connect(lambda checked=False, p=pid: self.switch_provider(p))
+        m.addAction("透明卡片", self._to_glass)
         m.addSeparator()
         m.addAction("退出", QApplication.quit)
         m.exec(self.mapToGlobal(pos))
 
+    def _to_glass(self):
+        save_conf({"style": "glass"})
+        if self._on_style_restart:
+            QTimer.singleShot(0, self._on_style_restart)
 
-def make_tray(pet: PetWindow) -> QSystemTrayIcon:
+
+def make_tray(host) -> QSystemTrayIcon:
     icon = QIcon(WHALE)
     tray = QSystemTrayIcon(icon)
     tray.setToolTip("AI余额桌宠")
     menu = QMenu()
-    menu.addAction("设置", pet.open_settings)
-    menu.addAction("刷新", lambda: pet.refresh(True))
-    menu.addAction("显示/隐藏", lambda: pet.setVisible(not pet.isVisible()))
+    menu.addAction("设置", host.open_settings)
+    menu.addAction("刷新", lambda: host.refresh(True))
+    menu.addAction("显示/隐藏", lambda: host.setVisible(not host.isVisible()))
     menu.addSeparator()
     menu.addAction("退出", QApplication.quit)
     tray.setContextMenu(menu)
-    tray.activated.connect(lambda r: pet.open_settings() if r == QSystemTrayIcon.Trigger else None)
+    tray.activated.connect(lambda r: host.open_settings() if r == QSystemTrayIcon.Trigger else None)
     tray.show()
     return tray
 
 
+class Shell:
+    def __init__(self):
+        self.win = None
+        self.tray = None
+        self.rebuild()
+
+    def rebuild(self):
+        style = str(load_conf().get("style") or "whale")
+        old = self.win
+        if style == "glass":
+            from glass import GlassWindow
+
+            self.win = GlassWindow(self.rebuild)
+        else:
+            self.win = PetWindow(self.rebuild)
+        self.win.show()
+        if self.tray is None:
+            self.tray = make_tray(self)
+        if old is not None:
+            old.hide()
+            old.close()
+            old.deleteLater()
+
+    def open_settings(self):
+        if self.win:
+            self.win.open_settings()
+
+    def refresh(self, manual=True):
+        if self.win:
+            self.win.refresh(manual)
+
+    def setVisible(self, v):
+        if self.win:
+            self.win.setVisible(v)
+
+    def isVisible(self):
+        return bool(self.win and self.win.isVisible())
+
+    def _pin_top(self):
+        if self.win:
+            self.win._pin_top()
+
+
 def main():
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("AI余额桌宠")
-    pet = PetWindow()
-    pet.show()
-    tray = make_tray(pet)
-    pet._tray = tray
-    app.applicationStateChanged.connect(lambda *_: pet._pin_top())
+    shell = Shell()
+    app.applicationStateChanged.connect(lambda *_: shell._pin_top())
     sys.exit(app.exec())
 
 
