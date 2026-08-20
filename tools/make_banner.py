@@ -20,6 +20,7 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
+    QFontDatabase,
     QFontMetrics,
     QLinearGradient,
     QPainter,
@@ -33,13 +34,42 @@ W, H = 1280, 640
 OUT = os.path.join(ROOT, "assets", "banner.png")
 WHALE = os.path.join(ROOT, "assets", "DSniang02.png")
 
+# offscreen 平台下 Qt 读不到系统字体，所有字会渲染成方块，必须手动加载字体文件
+CJK_FONT_CANDIDATES = [
+    r"C:\Windows\Fonts\msyh.ttc",        # 微软雅黑（含 UI 变体）
+    r"C:\Windows\Fonts\msyhbd.ttc",      # 微软雅黑 Bold
+    r"C:\Windows\Fonts\simhei.ttf",      # 黑体
+    r"C:\Windows\Fonts\simsun.ttc",      # 宋体
+    "/System/Library/Fonts/PingFang.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+]
+
+_FAMILY = "Microsoft YaHei UI"
+
+
+def load_cjk_font() -> str | None:
+    """手动加载一个中文字体，返回可用家族名；找不到返回 None。"""
+    global _FAMILY
+    for path in CJK_FONT_CANDIDATES:
+        if not os.path.isfile(path):
+            continue
+        fid = QFontDatabase.addApplicationFont(path)
+        if fid < 0:
+            continue
+        fams = QFontDatabase.applicationFontFamilies(fid)
+        if fams:
+            _FAMILY = fams[0]
+            return _FAMILY
+    return None
+
+
 ACCENT = QColor("#8be9fd")
 BODY = QColor("#9aa4c0")
 DIM = QColor("#6b7594")
 
 
 def font(size: int, bold: bool = False) -> QFont:
-    f = QFont("Microsoft YaHei UI")
+    f = QFont(_FAMILY)
     f.setPixelSize(size)
     f.setBold(bold)
     return f
@@ -47,6 +77,8 @@ def font(size: int, bold: bool = False) -> QFont:
 
 def main() -> None:
     app = QApplication(sys.argv)
+    fam = load_cjk_font()
+    print("字体:", fam or "未找到中文字体（文字会渲染成方块）")
 
     pix = QPixmap(W, H)
     pix.fill(QColor("#1b1e28"))
@@ -90,11 +122,11 @@ def main() -> None:
         p.drawText(QRectF(x, 236, w, 42), Qt.AlignCenter, c)
         x += w + 16
 
-    # 平台列表
+    # 平台列表（15px 才能完整放下 9 个平台名）
     p.setPen(DIM)
-    p.setFont(font(17))
+    p.setFont(font(15))
     p.drawText(
-        QRectF(64, 322, 600, 30),
+        QRectF(64, 322, 620, 30),
         Qt.AlignLeft | Qt.AlignVCenter,
         "Cursor · ChatGPT · Gemini · DeepSeek · OpenAI · OpenRouter · 硅基流动 · Kimi · 自定义",
     )
