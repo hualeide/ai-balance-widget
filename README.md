@@ -23,6 +23,7 @@ DeepSeek 小鲸鱼同款：透明置顶、拖拽吸附、左翻、Q 弹。盯多
 | Gemini | 同一台电脑的 Edge/Chrome 先登录 gemini.google.com |
 | DeepSeek | API Key（[申请](https://platform.deepseek.com/api_keys)） |
 | OpenRouter | API Key（[申请](https://openrouter.ai/keys)） |
+| OpenAI | API Key（[申请](https://platform.openai.com/api-keys)）：优先组织级 Admin Key 显示近 30 天花费，普通 Key 自动回退显示 API 余额 |
 | 硅基流动 | API Key（[申请](https://cloud.siliconflow.cn)） |
 | Kimi | API Key（[申请](https://platform.moonshot.cn)） |
 | 自定义 | 填 GET 地址、JSON 路径、可选 Bearer Key |

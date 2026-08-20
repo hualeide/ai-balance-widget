@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import time
 from typing import Any
 
 import requests
@@ -474,6 +475,15 @@ PRESETS = [
         "placeholder": "sk-or-...  openrouter.ai",
     },
     {
+        "id": "openai",
+        "short": "OpenAI",
+        "label": "OpenAI API",
+        "url": "",
+        "paths": [],
+        "unit": "USD",
+        "placeholder": "sk-...  platform.openai.com（优先 Admin Key）",
+    },
+    {
         "id": "siliconflow",
         "short": "硅基",
         "label": "硅基流动",
@@ -522,6 +532,63 @@ def fetch_openrouter(key: str) -> dict:
         return _fail("OpenRouter 请求失败")
 
 
+def _openai_admin_costs(api_key: str, days: int = 30) -> dict:
+    """组织级 Admin Key（官方）：近 days 天 API 花费（USD）。"""
+    end = int(time.time())
+    start = end - days * 86400
+    url = (
+        "https://api.openai.com/v1/organization/costs"
+        f"?start_time={start}&end_time={end}&bucket_width=1d"
+    )
+    try:
+        r = _get(url, headers={"Authorization": f"Bearer {api_key}"})
+    except Exception:
+        return _fail("Admin 接口请求失败")
+    if r.status_code != 200:
+        return _fail(f"Admin 接口 {r.status_code}")
+    data = r.json()
+    total = 0.0
+    for item in data.get("data") or []:
+        for res in item.get("results") or []:
+            amt = res.get("amount") or {}
+            if str(amt.get("currency") or "usd").lower() != "usd":
+                continue
+            val = _num(amt.get("value"))
+            if val is not None:
+                total += val
+    return _snap(total, "USD", None, f"近 {days} 天 API 花费")
+
+
+def _openai_credit_grants(api_key: str) -> dict:
+    """传统余额接口（非官方，随时可能失效）：可用余额 USD。"""
+    url = "https://api.openai.com/v1/dashboard/billing/credit_grants"
+    try:
+        r = _get(url, headers={"Authorization": f"Bearer {api_key}"})
+    except Exception:
+        return _fail("余额接口请求失败")
+    if r.status_code != 200:
+        return _fail(f"余额接口 {r.status_code}")
+    data = r.json()
+    avail = _num(data.get("total_available"))
+    if avail is None:
+        return _fail("余额接口返回异常")
+    return _snap(avail, "USD", None, "API 余额")
+
+
+def fetch_openai(key: str) -> dict:
+    """OpenAI API 账单：优先 Admin 官方接口（近 30 天花费），失败回退传统余额接口。"""
+    if not (key or "").strip():
+        return _fail("设置里填 OpenAI Key")
+    key = key.strip()
+    admin = _openai_admin_costs(key)
+    if admin.get("ok"):
+        return admin
+    grants = _openai_credit_grants(key)
+    if grants.get("ok"):
+        return grants
+    return _fail(f"{admin.get('error')}；{grants.get('error')}")
+
+
 def fetch_custom(item: dict) -> dict:
     name = str(item.get("name") or "自定义")
     url = str(item.get("url") or "").strip()
@@ -549,6 +616,7 @@ def get_api_key(conf: dict, pid: str) -> str:
     env_map = {
         "deepseek": "DEEPSEEK_API_KEY",
         "openrouter": "OPENROUTER_API_KEY",
+        "openai": "OPENAI_API_KEY",
         "siliconflow": "SILICONFLOW_API_KEY",
         "moonshot": "MOONSHOT_API_KEY",
     }
@@ -575,6 +643,8 @@ def fetch_balance(provider: str, conf: dict | None = None) -> dict:
         return fetch_deepseek(get_api_key(conf, "deepseek"))
     if provider == "openrouter":
         return fetch_openrouter(get_api_key(conf, "openrouter"))
+    if provider == "openai":
+        return fetch_openai(get_api_key(conf, "openai"))
     for preset in PRESETS:
         if preset["id"] == provider:
             return fetch_api_money(

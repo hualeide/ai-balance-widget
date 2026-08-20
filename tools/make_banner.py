@@ -96,7 +96,7 @@ def main() -> None:
     p.drawText(
         QRectF(64, 322, 600, 30),
         Qt.AlignLeft | Qt.AlignVCenter,
-        "Cursor · ChatGPT · Gemini · DeepSeek · OpenRouter · 硅基流动 · Kimi · 自定义",
+        "Cursor · ChatGPT · Gemini · DeepSeek · OpenAI · OpenRouter · 硅基流动 · Kimi · 自定义",
     )
 
     # 鲸鱼
