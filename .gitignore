@@ -1,0 +1,13 @@
+.DS_Store
+Thumbs.db
+*.log
+node_modules/
+.vscode/
+.idea/
+.venv/
+__pycache__/
+*.pyc
+
+# 本地工具缓存（不入库）
+.codegraph/
+.cursor/

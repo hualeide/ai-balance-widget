@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI 余额挂件预览</title>
+  <style>
+    html, body { height: 100%; margin: 0; background: #1b1e28; color: #cdd6f4; font-family: "Segoe UI", sans-serif; }
+    .hint { position: absolute; left: 24px; top: 24px; line-height: 1.6; opacity: .85; }
+    kbd { background: #313244; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <p class="hint">
+    本地预览（假数据）。装油猴后打开 ChatGPT / Gemini / Cursor 网页才是真余额。<br />
+    拖拽吸附 · 点一下刷新 · 余额过低会变成「穷光蛋」
+  </p>
+  <script>
+    window.__ABW_PREVIEW__ = {
+      cursor: { ok: true, amount: 12.34, unit: 'USD', remainingPct: 31, hint: '点击刷新' },
+      chatgpt: { ok: true, amount: 8, unit: '%', remainingPct: 8, hint: '3 小时窗口' },
+      google: { ok: true, amount: 2, unit: '%', remainingPct: 2, hint: '今日额度' }
+    }
+  </script>
+  <script src="ai-balance-widget.user.js"></script>
+</body>
+</html>

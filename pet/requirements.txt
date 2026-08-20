@@ -1,0 +1,3 @@
+PySide6-Essentials>=6.6
+requests>=2.31
+rookiepy>=0.5
