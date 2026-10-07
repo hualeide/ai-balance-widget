@@ -14,11 +14,24 @@ TIMEOUT = 20
 
 
 def _num(v: Any) -> float | None:
+    if isinstance(v, bool):
+        return None
     try:
         n = float(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return n if n == n and abs(n) != float("inf") else None
+
+
+def _pick_num(node: dict, *keys: str) -> float | None:
+    """按键顺序取第一个可解析数字。0 保留；坏值、NaN、Infinity 跳过。"""
+    for key in keys:
+        if key not in node:
+            continue
+        n = _num(node[key])
+        if n is not None:
+            return n
+    return None
 
 
 def _fail(msg: str) -> dict:
@@ -120,38 +133,50 @@ def _parse_cursor(data: dict | None) -> dict | None:
     if data.get("isUnlimited"):
         return _snap(float("inf"), "", 100, "不限量")
 
-    plan = (data.get("individualUsage") or {}).get("plan") or {}
-    overall = (data.get("individualUsage") or {}).get("overall") or {}
-    pu = data.get("planUsage") or data.get("plan_usage") or {}
+    iu = data.get("individualUsage")
+    iu = iu if isinstance(iu, dict) else {}
+    plan = iu.get("plan")
+    plan = plan if isinstance(plan, dict) else {}
+    overall = iu.get("overall")
+    overall = overall if isinstance(overall, dict) else {}
+    pu = data.get("planUsage")
+    if not isinstance(pu, dict):
+        pu = data.get("plan_usage")
+    if not isinstance(pu, dict):
+        pu = {}
 
-    remaining = _num(plan.get("remaining"))
+    remaining = _pick_num(plan, "remaining")
     if remaining is None:
-        remaining = _num(overall.get("remaining"))
+        remaining = _pick_num(overall, "remaining")
     if remaining is None:
-        remaining = _num(pu.get("remaining"))
+        remaining = _pick_num(pu, "remaining")
 
-    limit = _num(plan.get("limit"))
+    limit = _pick_num(plan, "limit")
     if limit is None:
-        limit = _num(overall.get("limit"))
+        limit = _pick_num(overall, "limit")
     if limit is None:
-        limit = _num(pu.get("limit"))
+        limit = _pick_num(pu, "limit")
 
-    used = _num(plan.get("used"))
+    used = _pick_num(plan, "used")
     if used is None:
-        used = _num(overall.get("used"))
-    included = _num(pu.get("includedSpend") or pu.get("included_spend"))
+        used = _pick_num(overall, "used")
+    included = _pick_num(pu, "includedSpend", "included_spend")
     if used is None:
         used = included
     if remaining is None and limit is not None and used is not None:
         remaining = max(0.0, limit - used)
 
-    pct = _num(plan.get("totalPercentUsed"))
+    pct = _pick_num(plan, "totalPercentUsed")
     if pct is None:
-        pct = _num(pu.get("totalPercentUsed") or pu.get("total_percent_used"))
+        pct = _pick_num(pu, "totalPercentUsed", "total_percent_used")
     if pct is None:
-        pct = _num(plan.get("apiPercentUsed") or pu.get("apiPercentUsed"))
+        pct = _pick_num(plan, "apiPercentUsed")
+    if pct is None:
+        pct = _pick_num(pu, "apiPercentUsed")
 
-    auto_pct = _num(pu.get("autoPercentUsed") or pu.get("auto_percent_used") or plan.get("autoPercentUsed"))
+    auto_pct = _pick_num(pu, "autoPercentUsed", "auto_percent_used")
+    if auto_pct is None:
+        auto_pct = _pick_num(plan, "autoPercentUsed")
     api_hint = ""
     if auto_pct is not None:
         auto_left = max(0, min(100, 100 - auto_pct))
@@ -185,12 +210,11 @@ def fetch_cursor() -> dict:
     jar = _cookie_jar(["cursor.com", ".cursor.com"])
     try:
         res = _get("https://cursor.com/api/usage-summary", jar=jar, headers={"Accept": "application/json"})
-        parsed = _parse_cursor(res.json() if res.content else None)
-        if parsed:
-            return parsed
-        if res.status_code in (401, 403):
-            pass
-        else:
+        if 200 <= res.status_code < 300:
+            parsed = _parse_cursor(res.json() if res.content else None)
+            if parsed:
+                return parsed
+        if res.status_code not in (401, 403):
             res2 = _get(
                 "https://cursor.com/api/dashboard/get-current-period-usage",
                 jar=jar,
@@ -198,9 +222,10 @@ def fetch_cursor() -> dict:
                 headers={"Content-Type": "application/json", "Origin": "https://cursor.com", "Accept": "application/json"},
                 body={},
             )
-            parsed = _parse_cursor(res2.json() if res2.content else None)
-            if parsed:
-                return parsed
+            if 200 <= res2.status_code < 300:
+                parsed = _parse_cursor(res2.json() if res2.content else None)
+                if parsed:
+                    return parsed
     except Exception:
         pass
     token = _cursor_token()
@@ -217,12 +242,14 @@ def fetch_cursor() -> dict:
             json={},
             timeout=TIMEOUT,
         )
-        parsed = _parse_cursor(res.json() if res.content else None)
-        if parsed:
-            return parsed
         if res.status_code in (401, 403):
             return _fail("Cursor 登录已过期")
-        return _fail("Cursor 接口结构变了")
+        if 200 <= res.status_code < 300:
+            parsed = _parse_cursor(res.json() if res.content else None)
+            if parsed:
+                return parsed
+            return _fail("Cursor 接口结构变了")
+        return _fail(f"Cursor HTTP {res.status_code}")
     except Exception:
         return _fail("Cursor 请求失败")
 
@@ -246,12 +273,16 @@ def _parse_chatgpt(data: dict | None) -> dict | None:
     if isinstance(rl, dict):
         win = rl.get("primary_window") or rl.get("five_hour") or rl.get("five_hour_limit")
         if isinstance(win, dict) and win.get("used_percent") is not None:
-            left = max(0, min(100, 100 - float(win["used_percent"])))
-            hint = "5 小时窗口"
-            sec = rl.get("secondary_window") or {}
-            if isinstance(sec, dict) and sec.get("used_percent") is not None:
-                hint = f"周额度剩 {round(100 - float(sec['used_percent']))}%"
-            return _snap(left, "%", left, hint)
+            used = _num(win.get("used_percent"))
+            if used is not None:
+                left = max(0.0, min(100.0, 100.0 - used))
+                hint = "5 小时窗口"
+                sec = rl.get("secondary_window") or {}
+                if isinstance(sec, dict) and sec.get("used_percent") is not None:
+                    sec_used = _num(sec.get("used_percent"))
+                    if sec_used is not None:
+                        hint = f"周额度剩 {round(100 - sec_used)}%"
+                return _snap(left, "%", left, hint)
         if isinstance(win, dict) and win.get("percent_left") is not None:
             pl = _num(win.get("percent_left"))
             if pl is not None:
@@ -261,11 +292,11 @@ def _parse_chatgpt(data: dict | None) -> dict | None:
     def hunt(node):
         if found or not isinstance(node, dict):
             return
-        used = node.get("used_percent") or node.get("usedPercent") or node.get("percent_used")
-        remaining = node.get("remaining") or node.get("remaining_messages") or node.get("percent_left")
+        used = _pick_num(node, "used_percent", "usedPercent", "percent_used")
+        remaining = _pick_num(node, "remaining", "remaining_messages", "percent_left")
         limit = node.get("limit") or node.get("message_cap") or node.get("max")
         u, r, l = _num(used), _num(remaining), _num(limit)
-        if u is not None and u <= 100 and (l is None or l <= 100):
+        if u is not None and 0 <= u <= 100:
             found.update(_snap(max(0, 100 - u), "%", max(0, 100 - u), "剩余额度"))
         elif r is not None and l and l > 0:
             found.update(_snap(r / l * 100, "%", max(0, min(100, r / l * 100)), "剩余额度"))
@@ -285,6 +316,10 @@ def fetch_chatgpt() -> dict:
         return _fail("请先在 Edge/Chrome 登录 ChatGPT")
     try:
         ses = _get("https://chatgpt.com/api/auth/session", jar=jar, headers={"Accept": "application/json"})
+        if ses.status_code in (401, 403):
+            return _fail("请先在浏览器登录 ChatGPT")
+        if ses.status_code < 200 or ses.status_code >= 300:
+            return _fail(f"ChatGPT HTTP {ses.status_code}")
         data = ses.json() if ses.content else {}
         token = (data or {}).get("accessToken")
         if not token:
@@ -295,14 +330,17 @@ def fetch_chatgpt() -> dict:
         if account_id:
             headers["ChatGPT-Account-Id"] = str(account_id)
         u = _get("https://chatgpt.com/backend-api/wham/usage", jar=jar, headers=headers)
-        parsed = _parse_chatgpt(u.json() if u.content else None)
-        if parsed:
-            return parsed
+        if 200 <= u.status_code < 300:
+            parsed = _parse_chatgpt(u.json() if u.content else None)
+            if parsed:
+                return parsed
         c = _get("https://chatgpt.com/backend-api/conversation_limit", jar=jar, headers=headers)
-        parsed = _parse_chatgpt(c.json() if c.content else None)
-        if parsed:
-            return parsed
-        return _fail("ChatGPT 额度接口不可用")
+        if 200 <= c.status_code < 300:
+            parsed = _parse_chatgpt(c.json() if c.content else None)
+            if parsed:
+                return parsed
+            return _fail("ChatGPT 额度接口不可用")
+        return _fail(f"ChatGPT HTTP {c.status_code}")
     except Exception:
         return _fail("ChatGPT 请求失败")
 
@@ -334,6 +372,8 @@ def fetch_google() -> dict:
         res = _get("https://gemini.google.com/usage?t=1", jar=jar, headers={"Accept": "text/html"})
         if res.status_code in (401, 403):
             return _fail("请先登录 Gemini")
+        if res.status_code < 200 or res.status_code >= 300:
+            return _fail(f"Gemini HTTP {res.status_code}")
         parsed = _parse_gemini_html(res.text or "")
         if parsed:
             return parsed
@@ -365,21 +405,32 @@ def fetch_deepseek(api_key: str) -> dict:
             return _fail("DeepSeek Key 无效")
         if res.status_code >= 500 and attempt == 0:
             continue
-        if not res.ok:
+        if res.status_code < 200 or res.status_code >= 300:
             return _fail(f"DeepSeek HTTP {res.status_code}")
         try:
             data = res.json()
         except Exception:
             return _fail("DeepSeek 返回异常")
-        info = None
-        if isinstance(data, dict) and isinstance(data.get("balance_infos"), list) and data["balance_infos"]:
-            info = data["balance_infos"][0]
-        if not info or info.get("total_balance") is None:
+        infos = data.get("balance_infos") if isinstance(data, dict) else None
+        if not isinstance(infos, list) or not infos:
             return _fail("DeepSeek 结构变了")
-        total = _num(info.get("total_balance"))
-        if total is None:
-            return _fail("DeepSeek 余额异常")
-        currency = str(info.get("currency") or "CNY")
+        picked = None
+        bad_total = False
+        for item in infos:
+            if not isinstance(item, dict):
+                continue
+            raw = item.get("total_balance")
+            if raw is None:
+                continue
+            total = _num(raw)
+            if total is None:
+                bad_total = True
+                continue
+            picked = (total, str(item.get("currency") or "CNY"))
+            break
+        if picked is None:
+            return _fail("DeepSeek 余额异常" if bad_total else "DeepSeek 结构变了")
+        total, currency = picked
         remain_pct = 100.0 if total > BROKE_PCT else max(0.0, total)
         hint = "点击刷新"
         if currency == "CNY":
@@ -433,6 +484,8 @@ def fetch_api_money(url: str, key: str, paths: list[str], unit: str, label: str,
         return _fail(f"{label} 请求失败")
     if status in (401, 403):
         return _fail(f"{label} Key 无效")
+    if status < 200 or status >= 300:
+        return _fail(f"{label} HTTP {status}")
     if not data:
         return _fail(f"{label} 返回异常")
     val = None
@@ -510,7 +563,7 @@ def fetch_openrouter(key: str) -> dict:
     key = key.strip()
     try:
         status, data = _bearer_json("https://openrouter.ai/api/v1/credits", key)
-        if status not in (401, 403) and isinstance(data, dict):
+        if 200 <= status < 300 and isinstance(data, dict):
             credits = _num(json_get(data, "data.total_credits"))
             usage = _num(json_get(data, "data.total_usage"))
             if credits is not None and usage is not None:
@@ -520,6 +573,8 @@ def fetch_openrouter(key: str) -> dict:
         status, data = _bearer_json("https://openrouter.ai/api/v1/key", key)
         if status in (401, 403):
             return _fail("OpenRouter Key 无效")
+        if status < 200 or status >= 300:
+            return _fail(f"OpenRouter HTTP {status}")
         left = _num(json_get(data, "data.limit_remaining"))
         limit = _num(json_get(data, "data.limit"))
         if left is None:
@@ -546,16 +601,35 @@ def _openai_admin_costs(api_key: str, days: int = 30) -> dict:
         return _fail("Admin 接口请求失败")
     if r.status_code != 200:
         return _fail(f"Admin 接口 {r.status_code}")
-    data = r.json()
+    try:
+        data = r.json()
+    except ValueError:
+        return _fail("Admin 接口返回异常")
+    buckets = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(buckets, list):
+        return _fail("Admin 接口返回异常")
     total = 0.0
-    for item in data.get("data") or []:
-        for res in item.get("results") or []:
-            amt = res.get("amount") or {}
+    got = False
+    broken = False
+    for item in buckets:
+        if not isinstance(item, dict) or not isinstance(item.get("results"), list):
+            broken = True
+            continue
+        for res in item["results"]:
+            if not isinstance(res, dict) or not isinstance(res.get("amount"), dict):
+                broken = True
+                continue
+            amt = res["amount"]
             if str(amt.get("currency") or "usd").lower() != "usd":
                 continue
-            val = _num(amt.get("value"))
-            if val is not None:
-                total += val
+            val = _num(amt.get("value")) if "value" in amt else None
+            if val is None:
+                broken = True
+                continue
+            total += val
+            got = True
+    if not got and broken:
+        return _fail("Admin 接口返回异常")
     return _snap(total, "USD", None, f"近 {days} 天 API 花费")
 
 
@@ -568,7 +642,12 @@ def _openai_credit_grants(api_key: str) -> dict:
         return _fail("余额接口请求失败")
     if r.status_code != 200:
         return _fail(f"余额接口 {r.status_code}")
-    data = r.json()
+    try:
+        data = r.json()
+    except ValueError:
+        return _fail("余额接口返回异常")
+    if not isinstance(data, dict):
+        return _fail("余额接口返回异常")
     avail = _num(data.get("total_available"))
     if avail is None:
         return _fail("余额接口返回异常")
@@ -600,9 +679,14 @@ def fetch_custom(item: dict) -> dict:
     if not key:
         try:
             res = requests.get(url, headers={"Accept": "application/json"}, timeout=TIMEOUT)
-            data = res.json() if res.content else None
         except Exception:
             return _fail(f"{name} 请求失败")
+        if res.status_code < 200 or res.status_code >= 300:
+            return _fail(f"{name} HTTP {res.status_code}")
+        try:
+            data = res.json() if res.content else None
+        except Exception:
+            return _fail(f"{name} 结构对不上")
         n = _num(json_get(data, path))
         if n is None:
             return _fail(f"{name} 结构对不上")
